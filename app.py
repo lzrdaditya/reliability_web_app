@@ -36,30 +36,64 @@ def step1_method():
         return redirect(url_for("step2_input"))
     return render_template("step1_method.html")
 
+# ...existing code...
 @app.route("/convert", methods=["GET", "POST"]) # Corrected route from fix #1
 def preprocess_dates():
     if request.method == "POST":
         # (The beginning of this function is unchanged)
         TTF_MIN_HOURS = 1 * 7 * 24
         TTF_MAX_HOURS = 3.5 * 365.25 * 24
-        
+
         raw_text = request.form.get("raw_dates", "")
-        date_strings = re.findall(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', raw_text)
-        
-        if len(date_strings) < 2:
+
+        # Accept both "YYYY-MM-DD HH:MM:SS" and ISO 8601 variants (with 'T', fractional seconds, Z or ±HH:MM)
+        import re
+        from datetime import datetime
+
+        iso_like = re.findall(r'\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+\-]\d{2}:?\d{2})?', raw_text)
+        if not iso_like:
+            error = "Please paste at least two valid timestamps (supports ISO 8601 and 'YYYY-MM-DD HH:MM:SS')."
+            return render_template("preprocess_dates.html", error=error)
+
+        datetimes = []
+        for s in iso_like:
+            parsed = None
+            try:
+                # Normalize space -> T for fromisoformat
+                s_norm = s.replace(' ', 'T')
+                # Replace trailing Z with +00:00 for fromisoformat
+                if s_norm.endswith('Z'):
+                    s_norm = s_norm[:-1] + '+00:00'
+                # Python's fromisoformat handles offsets like +HH:MM
+                parsed = datetime.fromisoformat(s_norm)
+            except Exception:
+                # Fallbacks for common variants
+                for fmt in ('%Y-%m-%d %H:%M:%S',
+                            '%Y-%m-%dT%H:%M:%S',
+                            '%Y-%m-%dT%H:%M:%S.%f',
+                            '%Y-%m-%dT%H:%M:%S%z',
+                            '%Y-%m-%dT%H:%M:%S.%f%z'):
+                    try:
+                        parsed = datetime.strptime(s, fmt)
+                        break
+                    except Exception:
+                        continue
+            if parsed:
+                datetimes.append(parsed)
+
+        if len(datetimes) < 2:
             error = "Please paste at least two valid timestamps to calculate a failure time."
             return render_template("preprocess_dates.html", error=error)
-        
-        datetimes = [datetime.strptime(ds, '%Y-%m-%d %H:%M:%S') for ds in date_strings]
+
         datetimes.sort()
-        
+
         all_failures_in_hours = []
         for i in range(1, len(datetimes)):
             delta = datetimes[i] - datetimes[i-1]
             hours = delta.total_seconds() / 3600
             all_failures_in_hours.append(hours)
 
-# Ensure all results are rounded to integer before passing to next page
+        # Ensure all results are rounded to integer before passing to next page
         filtered_failures = [
             int(round(h, 0))
             for h in all_failures_in_hours
@@ -71,14 +105,13 @@ def preprocess_dates():
             return render_template("preprocess_dates.html", error=error, raw_text=raw_text)
 
         session['pre_filled_failures'] = filtered_failures
-        
+
         # NEW: Store the original sorted datetimes (as strings) in the session.
         session['original_datetimes'] = [dt.isoformat() for dt in datetimes]
-        
+
         return redirect(url_for('step2_input'))
 
     return render_template("preprocess_dates.html")
-
 @app.route("/step2", methods=["GET", "POST"])
 def step2_input():
     # This block handles the form submission AFTER the user clicks "Next"
